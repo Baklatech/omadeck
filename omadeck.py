@@ -5,7 +5,7 @@
 
 omadeck new — собрать презентацию в мастере, omadeck edit FILE — править,
 omadeck FILE — показать,
-omadeck demo — посмотреть, что умеет. Цвета берутся из текущей темы Omarchy.
+omadeck demo — посмотреть, что умеет, omadeck без аргументов — меню. Цвета берутся из текущей темы Omarchy.
 """
 import argparse
 import bisect
@@ -24,7 +24,7 @@ import tomllib
 import tty
 import unicodedata
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 THEME_FILE = "~/.local/state/omarchy/current/theme/colors.toml"
 # запасная палитра, если темы Omarchy нет (Tokyo Night)
@@ -37,7 +37,7 @@ BOLD, ITALIC = 1, 2
 
 # русская раскладка: те же физические клавиши
 RU = {"й": "q", "к": "r", "р": "h", "о": "j", "л": "k", "д": "l", "т": "n",
-      "з": "p", "п": "g", "П": "G"}
+      "з": "p", "п": "g", "П": "G", "щ": "o", "и": "b", "е": "t"}
 
 
 class DeckError(Exception):
@@ -730,6 +730,9 @@ def draw_lines(scr, x, y, lines, t, th, ymax):
     k = 0
     for i, l in enumerate(lines):
         if y + i >= ymax:
+            rest = sum(1 for r in lines[i:] if r)
+            if t > 0:               # не молчим, если текст не поместился
+                scr.text(x, ymax, f"… не поместилось строк: {rest}", th.muted)
             break
         if l:
             reveal(scr, x + l[0], y + i, l[1], t - k * 0.06, th)
@@ -1452,6 +1455,562 @@ def ic_omarchy(p, t):
                mix(p.A, p.F, 1 - abs(mid - ph) * 3))
 
 
+# --- остальные области жизни: дом, здоровье, спорт, природа, деньги, поездки, досуг, общение
+
+def rot(x, y, a, ox=0.0, oy=0.0):
+    c, s = math.cos(a), math.sin(a)
+    return ox + (x - ox) * c - (y - oy) * s, oy + (x - ox) * s + (y - oy) * c
+
+
+def _spark(p, x, y, d, c):
+    p.line(x - d, y, x + d, y, c)
+    p.line(x, y - d, x, y + d, c)
+
+
+def _road(p, t, y, v=0.5):
+    for i in range(4):
+        x = (i / 4 - t * v) % 1 * 1.8 - 0.9
+        p.line(x, y, min(0.9, x + 0.16), y, p.M)
+
+
+def _wheel(p, cx, cy, r, a, c):
+    p.disc(cx, cy, r, None)
+    p.arc(cx, cy, r, c)
+    for k in range(3):
+        b = a + k * math.tau / 3
+        p.line(cx, cy, cx + r * 0.85 * math.cos(b), cy + r * 0.85 * math.sin(b), p.M)
+
+
+def _steam(p, t, xs, y0):
+    for i, x0 in enumerate(xs):
+        pts = [(x0 + 0.06 * math.sin(t * 2.2 + i + s * 0.6), y0 - s * 0.05) for s in range(11)]
+        for s, (a, b) in enumerate(zip(pts, pts[1:])):
+            p.line(a[0], a[1], b[0], b[1], mix(p.F, p.th.bg, s / 11))
+
+
+def ic_home(p, t):
+    for i in range(4):
+        ph = (t * 0.45 + i / 4) % 1
+        p.arc(0.45 + 0.1 * math.sin(ph * 6 + i), -0.66 - ph * 0.24, 0.03 + 0.05 * ph,
+              mix(p.M, p.th.bg, ph))
+    p.box(0.38, -0.62, 0.52, -0.3, p.A)
+    roof = [(-0.8, -0.05), (0, -0.75), (0.8, -0.05)]
+    p.fill(roof, None)
+    p.path(roof, p.F)
+    p.box(-0.6, -0.05, 0.6, 0.75, p.A)
+    p.box(-0.12, 0.3, 0.14, 0.75, p.F)
+    lit = int(t * 0.6) % 3 > 0
+    p.box(-0.46, 0.1, -0.22, 0.34, p.H if lit else p.M, lit)
+
+
+def ic_tree(p, t):
+    sw = math.sin(t * 1.2) * 0.05
+    p.fill([(-0.07, 0.8), (0.07, 0.8), (0.05, 0.2), (-0.05, 0.2)], p.M)
+    for i, (y, w) in enumerate(((0.3, 0.6), (-0.05, 0.48), (-0.38, 0.34))):
+        s = sw * (i + 1)
+        p.path([(-w + s * 0.5, y), (s, y - 0.5), (w + s * 0.5, y)], p.A, True)
+    p.line(-0.6, 0.8, 0.6, 0.8, p.M)
+
+
+def ic_sun(p, t):
+    p.disc(0, 0, 0.32, p.F)
+    for i in range(12):
+        a = t * 0.4 + i * math.tau / 12
+        r1 = (0.76 if i % 2 else 0.62) + 0.06 * math.sin(t * 3 + i * 1.6)
+        p.line(0.44 * math.cos(a), 0.44 * math.sin(a), r1 * math.cos(a), r1 * math.sin(a), p.A)
+
+
+def ic_moon(p, t):
+    p.disc(-0.12, 0, 0.62, p.F)
+    p.disc(0.16, -0.16, 0.54, None)
+    for i in range(6):
+        tw = math.sin(t * 2.5 + i * 2.1)
+        if tw > 0:
+            _spark(p, 0.2 + 0.6 * h01(i, 11), -0.75 + 1.4 * h01(i, 12), 0.08 * tw, p.B)
+
+
+def ic_mountain(p, t):
+    p.disc(0.42, -0.3 - 0.28 * (0.5 + 0.5 * math.sin(t * 0.5)), 0.16, p.F)
+    for pts, c in (([(0.02, 0.7), (0.5, -0.12), (0.9, 0.7)], p.M),
+                   ([(-0.9, 0.7), (-0.25, -0.6), (0.4, 0.7)], p.A)):
+        p.fill(pts, None)
+        p.path(pts, c)
+    p.path([(-0.415, -0.27), (-0.31, -0.18), (-0.24, -0.3), (-0.16, -0.18), (-0.085, -0.27)], p.B)
+    p.line(-0.9, 0.7, 0.9, 0.7, p.M)
+
+
+def ic_drop(p, t):
+    ph = t * 0.7 % 1
+    p.arc(0, 0.5, 0.85, p.th.faint, ry=0.22)
+    if ph < 0.5:
+        y = -0.85 + (ph / 0.5) ** 2 * 1.2
+        p.fill([(0, y - 0.26), (0.1, y - 0.02), (0.08, y + 0.07), (0, y + 0.11),
+                (-0.08, y + 0.07), (-0.1, y - 0.02)], p.F)
+    else:
+        q = (ph - 0.5) / 0.5
+        for k in range(3):
+            r = q * 0.9 - k * 0.22
+            if r > 0.03:
+                p.arc(0, 0.5, r, mix(p.A, p.th.bg, q * 0.8), ry=r * 0.26)
+
+
+def ic_fire(p, t):
+    w1, w2, w3 = (0.05 * math.sin(t * k + i) for i, k in enumerate((9, 13, 7)))
+    p.fill([(-0.4, 0.5), (-0.5, 0.12), (-0.3, -0.2 + w1), (-0.2, 0.05), (w2 * 2, -0.82 + w3),
+            (0.2, -0.22), (0.32, -0.4 + w1), (0.5, 0.12), (0.4, 0.5), (0.18, 0.68),
+            (-0.18, 0.68)], p.F)
+    p.fill([(-0.18, 0.5), (-0.2, 0.22), (w2, -0.2 + w3 * 2), (0.2, 0.22), (0.18, 0.5),
+            (0, 0.64)], p.H)
+    p.line(-0.6, 0.85, 0.6, 0.7, p.M)
+    p.line(-0.6, 0.7, 0.6, 0.85, p.M)
+
+
+def ic_flower(p, t):
+    sw = math.sin(t * 1.3) * 0.06
+    p.path([(0, 0.85), (sw * 0.5, 0.3), (sw, -0.1)], p.M)
+    p.fill([(0.02, 0.55), (0.3, 0.32), (0.36, 0.5)], p.M)
+    for i in range(6):
+        a = t * 0.4 + i * math.tau / 6
+        p.disc(sw + 0.27 * math.cos(a), -0.32 + 0.27 * math.sin(a), 0.15, p.F)
+    p.disc(sw, -0.32, 0.13, p.H)
+
+
+def _ecg(v):
+    v %= 1
+    if 0.1 < v < 0.2:
+        return -0.12 * math.sin((v - 0.1) / 0.1 * math.pi)
+    for a, b, y0, y1 in ((0.28, 0.32, 0, 0.12), (0.32, 0.38, 0.12, -0.75),
+                         (0.38, 0.44, -0.75, 0.3), (0.44, 0.48, 0.3, 0)):
+        if a <= v < b:
+            return y0 + (y1 - y0) * (v - a) / (b - a)
+    if 0.6 < v < 0.78:
+        return -0.2 * math.sin((v - 0.6) / 0.18 * math.pi)
+    return 0.0
+
+
+def ic_pulse(p, t):
+    head, n = t * 0.45 % 1, 90
+    pts = [(-0.9 + 1.8 * i / n, 0.1 + _ecg(i / n * 2)) for i in range(n + 1)]
+    for i, (a, b) in enumerate(zip(pts, pts[1:])):
+        age = (head - i / n) % 1
+        if age < 0.85:
+            p.line(a[0], a[1], b[0], b[1], mix(p.F, p.th.faint, age * 1.3))
+    hx, hy = pts[int(head * n)]
+    p.disc(hx, hy, 0.05, p.H)
+
+
+def ic_medkit(p, t):
+    ph = t * 1.1 % 1
+    s = 1 + 0.15 * max(0.0, math.sin(ph * math.tau * 2)) * math.exp(-ph * 4)
+    p.box(-0.75, -0.4, 0.75, 0.7, p.A)
+    p.path([(-0.25, -0.4), (-0.25, -0.62), (0.25, -0.62), (0.25, -0.4)], p.A)
+    p.box(-0.1 * s, 0.15 - 0.32 * s, 0.1 * s, 0.15 + 0.32 * s, p.F, True)
+    p.box(-0.32 * s, 0.15 - 0.1 * s, 0.32 * s, 0.15 + 0.1 * s, p.F, True)
+
+
+def ic_apple(p, t):
+    b = 0.03 * math.sin(t * 2)
+    p.disc(-0.2, 0.14 + b, 0.42, p.F)
+    p.disc(0.2, 0.14 + b, 0.42, p.F)
+    p.disc(0, -0.42 + b, 0.13, None)
+    p.line(0, -0.24 + b, 0.05, -0.6 + b, p.M)
+    p.fill([(0.07, -0.5 + b), (0.3, -0.74 + b), (0.42, -0.52 + b), (0.2, -0.42 + b)], p.A)
+    p.arc(-0.22, 0.1 + b, 0.27, p.H, math.pi * 1.05, math.pi * 1.45)
+
+
+def ic_dumbbell(p, t):
+    y = 0.25 * math.sin(t * 2.2)
+    p.box(-0.5, y - 0.05, 0.5, y + 0.05, p.M, True)
+    for sg in (-1, 1):
+        p.box(sg * 0.5, y - 0.38, sg * 0.66, y + 0.38, p.A, True)
+        p.box(sg * 0.7, y - 0.26, sg * 0.82, y + 0.26, p.F, True)
+
+
+def ic_ball(p, t):
+    ph = t * 0.9 % 1
+    h = 4 * ph * (1 - ph)
+    sq = 1 - 0.18 * max(0.0, 1 - h * 6)
+    r, y = 0.32, 0.45 - h * 0.85
+    p.arc(0, y, r, p.A, ry=r * sq)
+    pent = [(0.13 * math.cos(t * 2 + i * math.tau / 5), y + 0.13 * sq * math.sin(t * 2 + i * math.tau / 5))
+            for i in range(5)]
+    p.fill(pent, p.F)
+    for i, (x, yy) in enumerate(pent):
+        a = t * 2 + i * math.tau / 5
+        p.line(x, yy, r * math.cos(a), y + r * sq * math.sin(a), p.M)
+    w = 0.34 * (1 - 0.6 * h)
+    p.line(-w, 0.8, w, 0.8, p.M)
+
+
+def ic_bike(p, t):
+    for cx in (-0.5, 0.5):
+        _wheel(p, cx, 0.35, 0.32, t * 3, p.A)
+    p.path([(-0.5, 0.35), (-0.05, 0.35), (0.3, -0.2), (-0.2, -0.2), (-0.5, 0.35)], p.F)
+    p.line(-0.2, -0.2, -0.05, 0.35, p.F)
+    p.path([(0.5, 0.35), (0.3, -0.2), (0.27, -0.4), (0.4, -0.42)], p.F)
+    p.line(-0.2, -0.2, -0.22, -0.3, p.F)
+    p.line(-0.32, -0.3, -0.12, -0.3, p.B)
+    _road(p, t, 0.78)
+
+
+def ic_trophy(p, t):
+    p.fill([(-0.36, -0.6), (0.36, -0.6), (0.3, -0.15), (0.12, 0.1), (-0.12, 0.1),
+            (-0.3, -0.15)], p.A)
+    p.arc(-0.4, -0.35, 0.17, p.A, math.pi / 2, math.pi * 1.5)
+    p.arc(0.4, -0.35, 0.17, p.A, -math.pi / 2, math.pi / 2)
+    p.box(-0.05, 0.1, 0.05, 0.42, p.A, True)
+    p.box(-0.28, 0.42, 0.28, 0.58, p.F, True)
+    for i, (x, y) in enumerate(((-0.62, -0.72), (0.66, -0.6), (0.5, 0.2), (-0.55, 0.1))):
+        tw = math.sin(t * 3 + i * 1.9)
+        if tw > 0.2:
+            _spark(p, x, y, 0.09 * tw, p.H)
+
+
+def ic_gamepad(p, t):
+    p.arc(-0.45, 0.05, 0.4, p.A, math.pi / 2, math.pi * 1.5)
+    p.arc(0.45, 0.05, 0.4, p.A, -math.pi / 2, math.pi / 2)
+    p.line(-0.45, -0.35, 0.45, -0.35, p.A)
+    p.line(-0.45, 0.45, 0.45, 0.45, p.A)
+    p.box(-0.5, -0.11, -0.4, 0.21, p.F, True)
+    p.box(-0.61, 0.0, -0.29, 0.1, p.F, True)
+    for i, (dx, dy) in enumerate(((0, -0.15), (0.15, 0), (0, 0.15), (-0.15, 0))):
+        if int(t * 3) % 4 == i:
+            p.disc(0.45 + dx, 0.05 + dy, 0.07, p.B)
+        else:
+            p.arc(0.45 + dx, 0.05 + dy, 0.06, p.M)
+
+
+def ic_book(p, t):
+    for sg in (-1, 1):
+        p.path([(0, -0.45), (sg * 0.4, -0.55), (sg * 0.82, -0.45), (sg * 0.82, 0.5),
+                (sg * 0.4, 0.4), (0, 0.5)], p.A)
+        for i in range(4):
+            p.line(sg * 0.14, -0.22 + i * 0.17, sg * 0.68, -0.25 + i * 0.17, p.M)
+    p.line(0, -0.45, 0, 0.5, p.A)
+    ang = math.pi * ease_io((t * 0.45 % 1) / 0.6)      # страница перелистывается
+    x, lift = 0.82 * math.cos(ang), 0.28 * math.sin(ang)
+    p.path([(0, -0.45), (x * 0.5, -0.52 - lift), (x, -0.45 - lift), (x, 0.5 - lift),
+            (x * 0.5, 0.42 - lift), (0, 0.5)], p.F)
+
+
+def ic_cap(p, t):
+    p.path([(-0.45, 0.02), (-0.45, 0.4)], p.F)
+    p.path([(0.45, 0.02), (0.45, 0.4)], p.F)
+    p.arc(0, 0.4, 0.45, p.F, 0, math.pi, ry=0.15)
+    p.fill([(0, -0.5), (0.85, -0.15), (0, 0.2), (-0.85, -0.15)], p.A)
+    a = math.sin(t * 2) * 0.35
+    ex, ey = 0.6 + 0.45 * math.sin(a), -0.05 + 0.45 * math.cos(a)
+    p.line(0, -0.15, 0.6, -0.05, p.B)
+    p.line(0.6, -0.05, ex, ey, p.B)
+    p.disc(ex, ey, 0.05, p.F)
+
+
+def ic_briefcase(p, t):
+    b = 0.02 * math.sin(t * 2)
+    p.box(-0.75, -0.25 + b, 0.75, 0.65 + b, p.A)
+    p.path([(-0.25, -0.25 + b), (-0.25, -0.5 + b), (0.25, -0.5 + b), (0.25, -0.25 + b)], p.F)
+    p.line(-0.75, 0.13 + b, 0.75, 0.13 + b, p.M)
+    p.box(-0.09, 0.03 + b, 0.09, 0.23 + b, p.H if t * 1.2 % 1 < 0.3 else p.F, True)
+
+
+def ic_calendar(p, t):
+    p.box(-0.7, -0.6, 0.7, 0.75, p.A)
+    p.box(-0.7, -0.6, 0.7, -0.3, p.A, True)
+    for x in (-0.35, 0.35):
+        p.line(x, -0.78, x, -0.5, p.F)
+    cur = int(t * 1.5) % 12
+    for i in range(12):
+        x, y = -0.5 + i % 4 * 0.33, -0.08 + i // 4 * 0.27
+        if i == cur:
+            p.box(x - 0.1, y - 0.09, x + 0.1, y + 0.09, p.F, True)
+        else:
+            p.disc(x, y, 0.045, p.M)
+
+
+def ic_hourglass(p, t):
+    ph = t * 0.22 % 1
+    a = math.pi * ease_io((ph - 0.85) / 0.15)          # в конце цикла переворачивается
+    f = min(1.0, ph / 0.85)
+    R = lambda pts: [rot(x, y, a) for x, y in pts]
+    p.path(R([(-0.4, -0.7), (0.4, -0.7), (0.05, 0), (0.4, 0.7), (-0.4, 0.7), (-0.05, 0)]), p.A, True)
+    for y in (-0.7, 0.7):
+        p.path(R([(-0.5, y), (0.5, y)]), p.F)
+    yl = -0.62 * (1 - f) - 0.04
+    w = 0.03 + 0.33 * (-yl / 0.7)
+    p.fill(R([(-w, yl), (w, yl), (0.02, -0.03), (-0.02, -0.03)]), p.F)
+    if f > 0.02:
+        wb = 0.36 * math.sqrt(f)
+        p.fill(R([(-wb, 0.66), (wb, 0.66), (0, 0.66 - 0.5 * f)]), p.F)
+    if 0 < f < 1:
+        p.path(R([(0, 0), (0, 0.64)]), p.F)
+
+
+def ic_coin(p, t):
+    k = abs(math.cos(t * 2.2))
+    if k < 0.08:
+        p.box(-0.04, -0.6, 0.04, 0.6, p.A, True)
+        return
+    p.arc(0, 0, 0.6 * k, p.A, ry=0.6)
+    p.arc(0, 0, 0.47 * k, p.M, ry=0.47)
+    p.path([(x * k, y) for x, y in ((0.16, -0.2), (0, -0.26), (-0.16, -0.18), (-0.14, -0.05),
+                                    (0.14, 0.05), (0.16, 0.18), (0, 0.26), (-0.16, 0.2))], p.F)
+    p.line(0, -0.34, 0, 0.34, p.F)
+
+
+def ic_card(p, t):
+    p.box(-0.85, -0.5, 0.85, 0.5, p.A)
+    p.box(-0.85, -0.3, 0.85, -0.12, p.A, True)
+    p.box(-0.65, 0.02, -0.38, 0.22, p.F)
+    for g in range(4):
+        for k in range(3):
+            p.disc(-0.62 + g * 0.36 + k * 0.08, 0.36, 0.022, p.M)
+    x0 = -1.2 + (t * 0.6 % 1) * 2.8                     # блик
+    for i in range(24):
+        x, y = x0 + 0.35 * i / 24, 0.48 - 0.96 * i / 24
+        if -0.83 < x < 0.83:
+            p.line(x, y, x, y, p.H)
+
+
+def ic_cart(p, t):
+    ph = t * 0.6 % 1
+    p.box(0.02, -0.95 + ph * 0.55, 0.2, -0.77 + ph * 0.55, mix(p.B, p.th.bg, ph * 0.7), True)
+    p.path([(-0.85, -0.55), (-0.62, -0.55), (-0.4, 0.3), (0.55, 0.3), (0.72, -0.3), (-0.54, -0.3)], p.A)
+    for x in (-0.2, 0.1, 0.4):
+        p.line(x, -0.3, x, 0.3, p.M)
+    p.line(-0.46, 0.0, 0.63, 0.0, p.M)
+    for x in (-0.3, 0.45):
+        _wheel(p, x, 0.58, 0.12, t * 4, p.F)
+
+
+def ic_gift(p, t):
+    l = 0.16 * abs(math.sin(t * 2.5)) ** 3
+    p.box(-0.6, -0.1, 0.6, 0.75, p.A)
+    p.box(-0.08, -0.1, 0.08, 0.75, p.F, True)
+    p.box(-0.68, -0.34 - l, 0.68, -0.12 - l, p.A)
+    p.box(-0.08, -0.34 - l, 0.08, -0.12 - l, p.F, True)
+    for sg in (-1, 1):
+        p.arc(sg * 0.18, -0.48 - l, 0.17, p.F, ry=0.11)
+    if l > 0.08:
+        for i, (x, y) in enumerate(((-0.8, -0.6), (0.82, -0.55), (0, -0.9))):
+            _spark(p, x, y, 0.07, p.H)
+
+
+def ic_plane(p, t):
+    for i in range(3):
+        x = (h01(i, 21) - t * 0.14 * (1 + i * 0.4)) % 1 * 2.2 - 1.1
+        y = -0.62 + i * 0.6
+        p.arc(x, y, 0.14, p.M, math.pi, math.tau)
+        p.arc(x + 0.17, y, 0.1, p.M, math.pi, math.tau)
+        p.line(x - 0.14, y, x + 0.27, y, p.M)
+    a, b = 0.95, 0.04 * math.sin(t * 2)
+    R = lambda pts: [rot(x, y + b, a) for x, y in pts]
+    for sg in (-1, 1):
+        p.fill(R([(sg * 0.07, -0.15), (sg * 0.75, 0.25), (sg * 0.75, 0.37), (sg * 0.07, 0.17)]), p.A)
+        p.fill(R([(sg * 0.07, 0.5), (sg * 0.3, 0.68), (sg * 0.3, 0.77), (sg * 0.07, 0.66)]), p.A)
+    p.fill(R([(0, -0.8), (0.08, -0.6), (0.08, 0.62), (0, 0.76), (-0.08, 0.62), (-0.08, -0.6)]), p.F)
+
+
+def ic_car(p, t):
+    b = 0.015 * math.sin(t * 9)
+    p.path([(-0.85, 0.3 + b), (-0.85, 0.02 + b), (-0.5, -0.02 + b), (-0.3, -0.32 + b),
+            (0.3, -0.32 + b), (0.52, -0.02 + b), (0.85, 0.05 + b), (0.85, 0.3 + b)], p.A, True)
+    p.path([(-0.42, -0.04 + b), (-0.25, -0.26 + b), (0.25, -0.26 + b), (0.42, -0.04 + b)], p.M, True)
+    p.line(0, -0.26 + b, 0, -0.04 + b, p.M)
+    p.disc(0.79, 0.14 + b, 0.04, p.H)
+    for x in (-0.5, 0.5):
+        _wheel(p, x, 0.32, 0.19, t * 5, p.F)
+    _road(p, t, 0.68, 0.8)
+
+
+def ic_pin(p, t):
+    h = abs(math.sin(t * 2.5)) * 0.2
+    y = -h
+    p.arc(0, -0.25 + y, 0.36, p.A, math.pi * 0.75, math.pi * 2.25)
+    p.line(-0.255, 0.005 + y, 0, 0.6 + y, p.A)
+    p.line(0.255, 0.005 + y, 0, 0.6 + y, p.A)
+    p.disc(0, -0.25 + y, 0.13, p.F)
+    p.arc(0, 0.72, 0.1 + 0.25 * (1 - h * 4), p.M, ry=0.06)
+
+
+def ic_compass(p, t):
+    p.arc(0, 0, 0.85, p.A)
+    for i in range(8):
+        a = i * math.tau / 8
+        r0 = 0.66 if i % 2 == 0 else 0.76
+        p.line(r0 * math.cos(a), r0 * math.sin(a), 0.82 * math.cos(a), 0.82 * math.sin(a), p.M)
+    a = 0.6 * math.sin(t * 1.3) * math.cos(t * 0.37)
+    side = [rot(0.1, 0, a), rot(-0.1, 0, a)]
+    p.fill([rot(0, -0.6, a)] + side, p.F)
+    p.path([rot(0, 0.6, a)] + side, p.M, True)
+    p.disc(0, 0, 0.04, p.B)
+
+
+def ic_music(p, t):
+    ys = [0.4 + 0.07 * math.sin(t * 3), 0.28 + 0.07 * math.sin(t * 3 + 1.5)]
+    xs = (-0.42, 0.3)
+    for x, y in zip(xs, ys):
+        p.disc(x, y, 0.15, p.F)
+        p.line(x + 0.14, y, x + 0.14, y - 0.78, p.F)
+    p.fill([(xs[0] + 0.14, ys[0] - 0.78), (xs[1] + 0.14, ys[1] - 0.78),
+            (xs[1] + 0.14, ys[1] - 0.62), (xs[0] + 0.14, ys[0] - 0.62)], p.A)
+    for k in range(2):
+        r = 0.15 + (t * 0.7 + k / 2) % 1 * 0.3
+        p.arc(0.62, -0.1, r, mix(p.M, p.th.bg, (r - 0.15) / 0.3), -0.7, 0.7)
+
+
+def ic_palette(p, t):
+    p.arc(0, 0.05, 0.82, p.A, ry=0.64)
+    p.arc(0.38, 0.3, 0.12, p.A)
+    cur = int(t * 1.5) % 5
+    ser = p.th.series
+    for i in range(5):
+        a = math.pi * 0.82 + i * 0.36
+        x, y = 0.54 * math.cos(a), 0.05 + 0.4 * math.sin(a)
+        p.disc(x, y, 0.11 if i == cur else 0.07, ser[i % len(ser)])
+        if i == cur:
+            p.line(x + 0.1, y - 0.1, x + 0.5, y - 0.55, p.F)
+
+
+def ic_camera(p, t):
+    ph = t % 2.5
+    shut = max(0.0, 1 - abs(ph - 0.12) / 0.12)          # затвор
+    p.box(-0.8, -0.35, 0.8, 0.6, p.A)
+    p.path([(-0.3, -0.35), (-0.2, -0.55), (0.2, -0.55), (0.3, -0.35)], p.A)
+    p.arc(0, 0.12, 0.33, p.F)
+    if shut > 0.5:
+        p.disc(0, 0.12, 0.3, p.H)
+    else:
+        p.arc(0, 0.12, 0.2 * (1 - shut), p.M)
+    p.box(0.5, -0.24, 0.68, -0.12, p.H if ph < 0.25 else p.M, ph < 0.25)
+
+
+def ic_mail(p, t):
+    ph = t * 0.4 % 1
+    op = ease_io((ph - 0.4) / 0.15) - ease_io((ph - 0.85) / 0.1)
+    if op > 0.3:                                        # письмо выглядывает
+        p.box(-0.55, -0.5 - 0.35 * op, 0.55, -0.5, p.M)
+        p.line(-0.35, -0.5 - 0.2 * op, 0.35, -0.5 - 0.2 * op, p.M)
+    p.box(-0.8, -0.5, 0.8, 0.55, p.A)
+    p.line(-0.8, 0.55, -0.15, 0.02, p.M)
+    p.line(0.8, 0.55, 0.15, 0.02, p.M)
+    p.path([(-0.8, -0.5), (0, 0.12 - 0.5 * op), (0.8, -0.5)], p.F)
+    if op < 0.1 and t * 2 % 1 < 0.6:
+        p.disc(0.76, -0.54, 0.12, p.H)
+
+
+def ic_phone(p, t):
+    ring = t % 2.4 < 1.4
+    sh = 0.04 * math.sin(t * 40) if ring else 0.0
+    p.box(-0.32 + sh, -0.8, 0.32 + sh, 0.8, p.A)
+    p.line(-0.1 + sh, -0.68, 0.1 + sh, -0.68, p.M)
+    p.arc(sh, 0.66, 0.05, p.M)
+    if ring:
+        p.disc(sh, 0, 0.1 + 0.03 * math.sin(t * 12), p.F)
+        for k in range(1, 3):
+            if int(t * 5) % 3 >= k:
+                for a in (0, math.pi):
+                    p.arc(0, 0, 0.42 + k * 0.17, p.F, a - 0.5, a + 0.5)
+    else:
+        for i in range(3):
+            p.line(-0.2, -0.3 + i * 0.25, 0.2 - 0.1 * i, -0.3 + i * 0.25, p.M)
+
+
+def ic_chat(p, t):
+    p.box(-0.85, -0.7, 0.35, 0.0, p.A)
+    p.path([(-0.6, 0.0), (-0.7, 0.2), (-0.4, 0.0)], p.A)
+    for i in range(3):
+        on = int(t * 3) % 4 > i
+        p.disc(-0.5 + i * 0.25, -0.35, 0.065 if on else 0.045, p.F if on else p.M)
+    p.box(-0.2, 0.22, 0.85, 0.72, p.F)
+    p.path([(0.6, 0.72), (0.72, 0.9), (0.42, 0.72)], p.F)
+    f = t * 0.5 % 1 * 1.6
+    p.trace([(-0.05, 0.38), (0.7, 0.38)], f, p.M)
+    p.trace([(-0.05, 0.55), (0.4, 0.55)], f - 0.8, p.M)
+
+
+def ic_key(p, t):
+    a, o = 0.35 * math.sin(t * 1.5), (0, -0.45)
+    p.arc(0, -0.45, 0.29, p.A)
+    p.arc(0, -0.45, 0.15, p.A)
+    R = lambda pts: [rot(x, y, a, *o) for x, y in pts]
+    p.path(R([(0, -0.16), (0, 0.78)]), p.F)
+    p.path(R([(0, 0.52), (0.22, 0.52)]), p.F)
+    p.path(R([(0, 0.72), (0.18, 0.72)]), p.F)
+
+
+def _paw(p, cx, cy, s, c):
+    p.disc(cx, cy + 0.12 * s, 0.26 * s, c)
+    for dx, dy in ((-0.34, -0.12), (-0.13, -0.36), (0.13, -0.36), (0.34, -0.12)):
+        p.disc(cx + dx * s, cy + dy * s, 0.11 * s, c)
+
+
+def ic_paw(p, t):
+    ph = t * 0.4 % 1 * 5                                # следы появляются по одному
+    for i, (x, y) in enumerate(((-0.5, 0.55), (0.1, 0.25), (-0.4, -0.15), (0.3, -0.5))):
+        if ph > i:
+            _paw(p, x, y, 0.62, mix(p.F, p.th.bg, clamp((ph - i - 2.2) / 2) * 0.75))
+
+
+def ic_scales(p, t):
+    a = 0.18 * math.sin(t * 1.2)
+    p.line(0, -0.6, 0, 0.72, p.A)
+    p.line(-0.35, 0.74, 0.35, 0.74, p.A)
+    for sg in (-1, 1):
+        ex, ey = sg * 0.62 * math.cos(a), -0.6 + sg * 0.62 * math.sin(a)
+        p.line(0, -0.6, ex, ey, p.F)
+        p.line(ex, ey, ex - 0.22, ey + 0.5, p.M)
+        p.line(ex, ey, ex + 0.22, ey + 0.5, p.M)
+        p.line(ex - 0.24, ey + 0.5, ex + 0.24, ey + 0.5, p.A)
+        p.arc(ex, ey + 0.5, 0.24, p.A, 0, math.pi, ry=0.13)
+    p.disc(0, -0.6, 0.05, p.B)
+
+
+def ic_building(p, t):
+    p.path([(-0.8, -0.35), (0, -0.8), (0.8, -0.35)], p.A, True)
+    p.disc(0, -0.52, 0.07, p.F)
+    for i, x in enumerate((-0.55, -0.18, 0.18, 0.55)):
+        lit = int(t * 2) % 4 == i
+        p.box(x - 0.07, -0.25, x + 0.07, 0.5, p.B if lit else p.F, lit)
+    p.box(-0.8, 0.5, 0.8, 0.62, p.A, True)
+    p.box(-0.9, 0.62, 0.9, 0.76, p.A)
+
+
+def ic_flag(p, t):
+    p.line(-0.6, -0.85, -0.6, 0.85, p.M)
+    xs = [-0.6 + 1.35 * i / 16 for i in range(17)]
+    wave = lambda x: 0.09 * math.sin(x * 5 - t * 4) * (x + 0.6)
+    top = [(x, -0.7 + wave(x)) for x in xs]
+    bot = [(x, -0.08 + wave(x)) for x in xs]
+    p.fill(top + bot[::-1], p.A)
+    p.path([(x, (a + b) / 2) for (x, a), (_, b) in zip(top, bot)], p.F)
+
+
+def ic_umbrella(p, t):
+    for i in range(8):
+        x = -0.9 + i * 0.26
+        y = -0.95 + (t * 1.2 + h01(i, 31)) % 1 * 1.9
+        if abs(x) > 0.74 or y < -0.6:
+            p.line(x, y, x - 0.03, y + 0.12, p.M)
+    p.arc(0, -0.05, 0.78, p.A, math.pi, math.tau)
+    for cx in (-0.52, 0, 0.52):
+        p.arc(cx, -0.05, 0.26, p.A, math.pi, math.tau, ry=0.12)
+    p.line(0, -0.05, 0, 0.6, p.F)
+    p.arc(0.12, 0.6, 0.12, p.F, 0, math.pi)
+    p.line(0, -0.83, 0, -0.93, p.F)
+
+
+def ic_food(p, t):
+    p.arc(0, 0.1, 0.5, p.A)
+    p.arc(0, 0.1, 0.34, p.M)
+    _steam(p, t, (-0.12, 0.12), -0.02)
+    for dx in (-0.1, 0, 0.1):
+        p.line(-0.75 + dx, -0.6, -0.75 + dx, -0.2, p.F)
+    p.line(-0.85, -0.2, -0.65, -0.2, p.F)
+    p.line(-0.75, -0.2, -0.75, 0.78, p.F)
+    p.path([(0.72, -0.6), (0.84, -0.4), (0.84, 0.1), (0.72, 0.1)], p.F, True)
+    p.line(0.76, 0.1, 0.76, 0.78, p.F)
+
+
 ICONS = {
     "omarchy": ic_omarchy, "rocket": ic_rocket, "gear": ic_gear, "globe": ic_globe,
     "heart": ic_heart, "clock": ic_clock, "bulb": ic_bulb, "server": ic_server,
@@ -1460,7 +2019,31 @@ ICONS = {
     "radar": ic_radar, "atom": ic_atom, "cube": ic_cube, "git": ic_git, "bolt": ic_bolt,
     "coffee": ic_coffee, "chart": ic_chart, "cpu": ic_cpu, "wifi": ic_wifi,
     "search": ic_search, "sync": ic_sync, "users": ic_users,
+    "home": ic_home, "tree": ic_tree, "sun": ic_sun, "moon": ic_moon, "mountain": ic_mountain,
+    "drop": ic_drop, "fire": ic_fire, "flower": ic_flower, "pulse": ic_pulse,
+    "medkit": ic_medkit, "apple": ic_apple, "dumbbell": ic_dumbbell, "ball": ic_ball,
+    "bike": ic_bike, "trophy": ic_trophy, "gamepad": ic_gamepad, "book": ic_book,
+    "cap": ic_cap, "briefcase": ic_briefcase, "calendar": ic_calendar,
+    "hourglass": ic_hourglass, "coin": ic_coin, "card": ic_card, "cart": ic_cart,
+    "gift": ic_gift, "plane": ic_plane, "car": ic_car, "pin": ic_pin, "compass": ic_compass,
+    "music": ic_music, "palette": ic_palette, "camera": ic_camera, "mail": ic_mail,
+    "phone": ic_phone, "chat": ic_chat, "key": ic_key, "paw": ic_paw, "scales": ic_scales,
+    "building": ic_building, "flag": ic_flag, "umbrella": ic_umbrella, "food": ic_food,
 }
+# по областям: так их показывают галерея (omadeck icons) и мастер
+ICON_GROUPS = {
+    "tech": ("Техника", "omarchy terminal server database cloud cpu git wifi lock gear sync "
+                        "search radar cube atom chart"),
+    "work": ("Работа и учёба", "briefcase calendar clock hourglass target check bulb rocket "
+                               "book cap users star warning bolt"),
+    "health": ("Здоровье и спорт", "heart pulse medkit apple dumbbell ball bike trophy"),
+    "nature": ("Природа", "tree flower sun moon mountain drop fire globe umbrella paw"),
+    "home": ("Дом, быт и деньги", "home key food coffee gift cart coin card"),
+    "leisure": ("Поездки и досуг", "plane car pin compass music palette camera gamepad"),
+    "people": ("Общение и общество", "mail phone chat scales building flag"),
+}
+ICON_GROUPS = {k: (title, names.split()) for k, (title, names) in ICON_GROUPS.items()}
+assert sorted(n for _, ns in ICON_GROUPS.values() for n in ns) == sorted(ICONS)
 
 
 def draw_icon(scr, name, x, y, cols, rows, t, th, appear=1.0):
@@ -1746,18 +2329,21 @@ class IconsSlide(Slide):
     def layout(self):
         top = self.header()
         avail, full = self.H - 2 - top, self.W - 2 * self.mx
-        for rows in (8, 6, 5, 4, 3):
+        group = self.opts.get("group")
+        self.names = ICON_GROUPS[group][1] if group else list(ICONS)
+        for rows in (12, 10, 8, 6, 5, 4, 3):
             self.rows, self.cellw, self.cellh = rows, rows * 2 + 4, rows + 2
             self.per = max(1, full // self.cellw)
-            if math.ceil(len(ICONS) / self.per) * self.cellh <= avail:
+            if math.ceil(len(self.names) / self.per) * self.cellh <= avail:
                 break
+        self.per = min(self.per, math.ceil(len(self.names) / max(1, avail // self.cellh)))
         self.gx = self.mx + (full - self.per * self.cellw) // 2
         self.gy = top
         self.dur = max(self.tdur, 1.5)
 
     def draw(self, scr, t):
         self.draw_header(scr, t)
-        for i, name in enumerate(ICONS):
+        for i, name in enumerate(self.names):
             x = self.gx + i % self.per * self.cellw
             y = self.gy + i // self.per * self.cellh
             if y + self.cellh > self.H - 1:
@@ -1817,6 +2403,8 @@ def parse_opts(kind, tokens):
         raise DeckError(f"нет эффекта «{opts['effect']}»; есть: {', '.join(EFFECTS)}")
     if kind == "split" and opts.get("icon", "omarchy") not in ICONS:
         raise DeckError(f"нет иконки «{opts['icon']}»; есть: {', '.join(ICONS)}")
+    if kind == "icons" and opts.get("group", "tech") not in ICON_GROUPS:
+        raise DeckError(f"нет набора «{opts['group']}»; есть: {', '.join(ICON_GROUPS)}")
     if kind == "chart" and opts.get("type", "bar") not in CHARTS:
         raise DeckError(f"нет графика «{opts['type']}»; есть: {', '.join(CHARTS)}")
     for k in ("min", "max"):
@@ -1871,7 +2459,7 @@ def parse_deck(text, path=None):
             if kind is None:
                 kind = "table" if any(l.strip().startswith("|") for l in lines) else "text"
             slides.append(KINDS[kind](parse_opts(kind, tokens), heading, lines, no))
-            slides[-1].raw = "\n".join(chunk).strip("\n")
+            slides[-1].raw, slides[-1].kind = "\n".join(chunk).strip("\n"), kind
         except (DeckError, ValueError) as e:
             raise DeckError(f"слайд {no}: {e}")
     if not slides:
@@ -2016,22 +2604,41 @@ omadeck demo  ·  omadeck new  ·  omadeck icons
 # ---------------------------------------------------------------- показ
 
 HELP = [
-    ("→  пробел  Enter  l", "дальше"),
-    ("←  Backspace  h", "назад"),
+    ("→  пробел  Enter  клик", "дальше"),
+    ("←  Backspace  правый клик", "назад"),
     ("g / G", "первый / последний слайд"),
     ("число, Enter", "перейти к слайду"),
+    ("o  Tab", "оглавление"),
+    ("b", "погасить экран"),
+    ("t", "часы и таймер"),
     ("r", "перечитать файл и повторить слайд"),
     ("?", "эта справка"),
-    ("q  Esc", "выход"),
+    ("q", "выход"),
 ]
 NEXT = {" ", "\r", "\n", "l", "j", "n", "\x1b[C", "\x1b[B", "\x1b[6~", "\x1bOC", "\x1bOB"}
 PREV = {"h", "k", "p", "\x7f", "\x08", "\x1b[D", "\x1b[A", "\x1b[5~", "\x1bOD", "\x1bOA"}
 FIRST = {"g", "\x1b[H", "\x1b[1~", "\x1bOH"}
 LAST = {"G", "\x1b[F", "\x1b[4~", "\x1bOF"}
+UP = {"k", "\x1b[A", "\x1bOA"}
+DOWN = {"j", "\x1b[B", "\x1bOB"}
+# кнопки мыши → клавиши; колесо — стрелки вверх/вниз, чтобы листать и оглавление
+MOUSE = {0: "\x1b[C", 2: "\x1b[D", 64: "\x1b[A", 65: "\x1b[B"}
 
 
-def render(deck, th, i, W, H, t, show_help=False, msg=""):
+def draw_box(scr, x, y, w, h, c):
+    for r in range(h):
+        for q in range(w):
+            edge = r in (0, h - 1)
+            ch = "─" if edge else " "
+            if q in (0, w - 1):
+                ch = ("╭╮" if r == 0 else "╰╯")[q > 0] if edge else "│"
+            scr.put(x + q, y + r, ch, c)
+
+
+def render(deck, th, i, W, H, t, overlay=None, msg="", extra="", sel=0):
     scr = Screen(W, H)
+    if overlay == "black":
+        return scr
     if W < 44 or H < 14:
         scr.text(1, 1, "окно слишком маленькое", th.muted)
         return scr
@@ -2040,26 +2647,33 @@ def render(deck, th, i, W, H, t, show_help=False, msg=""):
         sl.build(W, H, th, deck)
     sl.draw(scr, t)
     n, mx = len(deck.slides), max(3, W // 14)
-    cnt = f"{i + 1}/{n}"
+    cnt = (extra + "  ·  " if extra else "") + f"{i + 1}/{n}"
     scr.text(mx, H - 1, clip(msg or deck.title, W // 3), th.hot if msg else th.faint)
-    scr.text(W - mx - len(cnt), H - 1, cnt, th.muted)
+    scr.text(W - mx - width(cnt), H - 1, cnt, th.muted)
     bw = min(40, W // 4)
     for q in range(bw):
         scr.put((W - bw) // 2 + q, H - 1, "━", th.accent if q < round(bw * (i + 1) / n) else th.faint)
-    if show_help:
+    if overlay == "help":
         kw = max(width(k) for k, _ in HELP)
         bw = kw + max(width(d) for _, d in HELP) + 7
         bx, by = (W - bw) // 2, (H - len(HELP) - 2) // 2
-        for r in range(len(HELP) + 2):
-            for q in range(bw):
-                edge = r in (0, len(HELP) + 1)
-                ch = "─" if edge else " "
-                if q in (0, bw - 1):
-                    ch = ("╭╮" if r == 0 else "╰╯")[q > 0] if edge else "│"
-                scr.put(bx + q, by + r, ch, th.muted)
+        draw_box(scr, bx, by, bw, len(HELP) + 2, th.muted)
         for r, (k, d) in enumerate(HELP):
             scr.text(bx + 2, by + 1 + r, k, th.accent, BOLD)
             scr.text(bx + kw + 5, by + 1 + r, d, th.fg)
+    elif overlay == "toc":
+        bw, rows = min(W - 8, 76), min(n, H - 6)
+        bx, by = (W - bw) // 2, (H - rows - 2) // 2
+        draw_box(scr, bx, by, bw, rows + 2, th.muted)
+        top = int(clamp(sel - rows // 2, 0, n - rows))
+        for r in range(rows):
+            k = top + r
+            cur = k == sel
+            scr.text(bx + 2, by + 1 + r, ("▸" if cur else " ") + f"{k + 1:>3}",
+                     th.accent if cur else th.muted, BOLD if cur else 0)
+            scr.text(bx + 8, by + 1 + r, KIND_NAMES[deck.slides[k].kind], th.muted)
+            scr.text(bx + 25, by + 1 + r, clip(deck.slides[k].heading or "—", bw - 27),
+                     th.bright if cur else th.fg, BOLD if cur else 0)
     return scr
 
 
@@ -2067,7 +2681,7 @@ def parse_keys(data):
     i = 0
     while i < len(data):
         if data[i] == "\x1b":
-            m = re.match(r"\x1b[\[O][0-9;]*[A-Za-z~]", data[i:])
+            m = re.match(r"\x1b[\[O][<0-9;]*[A-Za-z~]", data[i:])
             if m:
                 yield m.group()
                 i += m.end()
@@ -2079,50 +2693,89 @@ def parse_keys(data):
 class Player:
     def __init__(self, deck, th, start=0):
         self.deck, self.th = deck, th
-        self.help, self.msg, self.msg_until = False, "", 0.0
+        self.overlay, self.sel, self.clock = None, 0, False
+        self.msg, self.msg_until = "", 0.0
+        self.began = time.monotonic()
+        self.mtime, self.checked, self.wheel = self.stat(), 0.0, 0.0
         self.goto(start)
+        self.say("? — справка", 6)
+
+    def stat(self):
+        try:
+            return os.stat(self.deck.path).st_mtime if self.deck.path else None
+        except OSError:
+            return None
 
     def goto(self, i):
         self.i = int(clamp(i, 0, len(self.deck.slides) - 1))
         self.deck.slides[self.i].enter()
         self.t0 = time.monotonic()
 
-    def say(self, msg):
-        self.msg, self.msg_until = msg, time.monotonic() + 4
+    def say(self, msg, secs=4):
+        self.msg, self.msg_until = msg, time.monotonic() + secs
 
-    def reload(self):
+    def reload(self, note=""):
+        self.mtime = self.stat()
         if self.deck.path:
             try:
                 deck = load_deck(self.deck.path)
                 deck.effect = self.deck.effect
                 self.deck = deck
+                if note:
+                    self.say(note, 2)
             except DeckError as e:
-                self.say(str(e))
+                self.say(str(e), 8)
         self.goto(self.i)
 
     def key(self, key, num):
         """Обрабатывает клавишу; возвращает False для выхода."""
-        if key in ("q", "\x1b", "\x03"):
+        if key in ("q", "\x03"):
             return False
+        n = len(self.deck.slides)
         sl = self.deck.slides[self.i]
         t = time.monotonic() - self.t0
-        if num and key in ("\r", "\n", "g"):
+        if self.overlay == "black":          # любая клавиша возвращает картинку
+            self.overlay = None
+        elif self.overlay == "toc":
+            if key in UP:
+                self.sel = (self.sel - 1) % n
+            elif key in DOWN:
+                self.sel = (self.sel + 1) % n
+            elif key in ("\r", "\n", " "):
+                self.overlay = None
+                self.goto(int(num) - 1 if num else self.sel)
+            elif key in ("\x1b", "o", "\t"):
+                self.overlay = None
+        elif key == "\x1b":                  # Esc посреди доклада не должен закрывать показ
+            if self.overlay:
+                self.overlay = None
+            else:
+                self.say("q — выход", 2)
+        elif num and key in ("\r", "\n", "g"):
             self.goto(int(num) - 1)
         elif key in NEXT:
-            if t < sl.dur:               # первое нажатие доигрывает анимацию
+            if t < sl.dur:                   # первое нажатие доигрывает анимацию
                 self.t0 -= sl.dur - t
-            elif self.i < len(self.deck.slides) - 1:
+            elif self.i < n - 1:
                 self.goto(self.i + 1)
+            else:
+                self.say("последний слайд · q — выход", 3)
         elif key in PREV:
             self.goto(self.i - 1)
         elif key in FIRST:
             self.goto(0)
         elif key in LAST:
-            self.goto(len(self.deck.slides) - 1)
+            self.goto(n - 1)
         elif key == "r":
             self.reload()
         elif key == "?":
-            self.help = not self.help
+            self.overlay = None if self.overlay == "help" else "help"
+        elif key in ("o", "\t"):
+            self.overlay, self.sel = "toc", self.i
+        elif key in ("b", "."):
+            self.overlay = "black"
+        elif key == "t":
+            self.clock = not self.clock
         return True
 
     def run(self):
@@ -2135,12 +2788,12 @@ class Player:
             signal.signal(sig, lambda *_: sys.exit(0))
         try:
             tty.setcbreak(fd)
-            out.write("\x1b[?1049h\x1b[?25l\x1b[?7l")
+            out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
             self.loop(fd, out)
         except KeyboardInterrupt:
             pass
         finally:
-            out.write("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+            out.write("\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
             out.flush()
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
@@ -2148,13 +2801,21 @@ class Player:
         prev, size, num = None, None, ""
         while True:
             now = time.monotonic()
+            if now - self.checked > 0.5:     # файл изменился на диске — перечитать
+                self.checked = now
+                if self.stat() not in (None, self.mtime):
+                    self.reload("файл перечитан")
             sz = os.get_terminal_size(fd)
             if (sz.columns, sz.lines) != size:
                 size, prev = (sz.columns, sz.lines), None
                 out.write("\x1b[2J")
-            msg = self.msg if now < self.msg_until else ("→ " + num if num else "")
+            msg = "→ " + num if num else self.msg if now < self.msg_until else ""
+            extra = ""
+            if self.clock:
+                el = int(now - self.began)
+                extra = f"{time.strftime('%H:%M')}  ·  {el // 60:02d}:{el % 60:02d}"
             lines = render(self.deck, self.th, self.i, size[0], size[1], now - self.t0,
-                           self.help, msg).lines()
+                           self.overlay, msg, extra, self.sel).lines()
             buf = ["\x1b[?2026h"]
             for y, l in enumerate(lines):
                 if prev is None or prev[y] != l:
@@ -2168,7 +2829,17 @@ class Player:
             busy = sl.animated or now - self.t0 < sl.dur + 0.3
             if not select.select([fd], [], [], 1 / 30 if busy else 1 / 10)[0]:
                 continue
-            for key in parse_keys(os.read(fd, 64).decode("utf-8", "ignore")):
+            for key in parse_keys(os.read(fd, 256).decode("utf-8", "ignore")):
+                m = re.fullmatch(r"\x1b\[<(\d+);\d+;\d+([Mm])", key)
+                if m:
+                    b = int(m.group(1))
+                    if m.group(2) == "m" or b not in MOUSE:
+                        continue
+                    if b >= 64 and self.overlay != "toc":   # один щелчок колеса — один шаг
+                        if time.monotonic() - self.wheel < 0.3:
+                            continue
+                        self.wheel = time.monotonic()
+                    key = MOUSE[b]
                 key = RU.get(key, key)
                 if key.isdigit():
                     num = (num + key)[-4:]
@@ -2180,7 +2851,13 @@ class Player:
 
 # ---------------------------------------------------------------- мастер
 
+DECK_DIR = os.path.expanduser(os.environ.get("OMADECK_DIR") or "~/Presentations")
 BACK = object()     # ответ «<» в мастере: вернуться на шаг назад
+
+
+def tilde(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 HEAD = ("head", "Заголовок", "str")
 BODY = ("body", "Текст; «- » — пункт списка, «.» — пустая строка", "lines", None)
 FIELDS = {
@@ -2204,7 +2881,7 @@ KIND_NAMES = {"title": "титул", "section": "раздел", "text": "тек�
 
 def slide_record(sl):
     """Слайд из файла → запись мастера. Нетронутые слайды пишутся обратно как были (raw)."""
-    kind = next(k for k, c in KINDS.items() if type(sl) is c)
+    kind = sl.kind
     body = [l.rstrip() for l in sl.body]
     while body and not body[-1]:
         body.pop()
@@ -2259,7 +2936,7 @@ def slide_text(s):
     return "\n".join(lines + s.get("more", []))
 
 
-def wizard(path, th, deck=None):
+def wizard(path, th, deck=None, base=""):
     """Собирает презентацию по вопросам (или правит готовую) и записывает файл."""
     try:
         import readline          # правка строки и подстановка прежнего значения
@@ -2327,7 +3004,8 @@ def wizard(path, th, deck=None):
             key, q, typ, dflt = fields[i]
             old = vals.get(key)
             if key == "icon":
-                print(tint(th.muted, "  " + " ".join(ICONS)))
+                for title, names in ICON_GROUPS.values():
+                    print(tint(th.muted, f"  {title}: ") + " ".join(names))
             if isinstance(typ, list):
                 v = choose(q, typ, old or dflt)
             elif typ == "str":
@@ -2363,12 +3041,18 @@ def wizard(path, th, deck=None):
         meta, slides = {"title": first["head"], "author": first["author"]}, [first]
     kinds = list(FIELDS)[1:]
     key = lambda s: tint(th.accent, s)
+
+    def compose():
+        head = "\n".join(f"{k}: {v}" for k, v in meta.items() if v)
+        return "\n\n---\n".join(([head] if head else []) + [slide_text(s) for s in slides]) + "\n"
+
     while True:
         print()
         for n, s in enumerate(slides, 1):
             print(f"  {key(f'{n:>2}')}  {tint(th.muted, KIND_NAMES[s['kind']].ljust(15))} {s['head']}")
-        print(f"\n  {key('+')} добавить  {key('N')} править  {key('-N')} удалить  "
-              f"{key('N>K')} переместить  {key('Enter')} записать")
+        print(f"\n  {key('+')} добавить  {key('+N')} вставить перед N  {key('N')} править  "
+              f"{key('-N')} удалить  {key('N>K')} переместить\n"
+              f"  {key('p')} показать без записи  {key('Enter')} записать")
         cmd = read(mark + "Что дальше: ").strip().replace(" ", "")
         n = len(slides)
         if cmd.isdigit() and 1 <= int(cmd) <= n:
@@ -2380,12 +3064,17 @@ def wizard(path, th, deck=None):
                 for mk, sk in (("title", "head"), ("author", "author")):    # подвал вслед за титулом
                     if old["kind"] == "title" and meta.get(mk) and meta[mk] == old[sk]:
                         meta[mk] = new[sk]
-        elif cmd in ("+", "a", "д"):
+        elif re.fullmatch(r"\+\d*", cmd):
             v = ask("Вид слайда: " + "  ".join(f"{i} {KIND_NAMES[k]}" for i, k in enumerate(kinds, 1)), "2")
             if v is not BACK and v.isdigit() and 1 <= int(v) <= len(kinds):
                 s = form(kinds[int(v) - 1])
                 if s:
-                    slides.append(s)
+                    slides.insert(int(clamp(int(cmd[1:] or n + 1) - 1, 0, n)), s)
+        elif re.fullmatch(r"[pп]\d*", cmd):
+            try:
+                Player(parse_deck(compose()), th, int(cmd[1:] or 1) - 1).run()
+            except DeckError as e:
+                print(tint(th.hot, f"  {e}"))
         elif re.fullmatch(r"-\d+", cmd) and 1 <= int(cmd[1:]) <= n and n > 1:
             del slides[int(cmd[1:]) - 1]
         elif re.fullmatch(r"\d+>\d+", cmd) and all(1 <= int(v) <= n for v in cmd.split(">")):
@@ -2399,19 +3088,92 @@ def wizard(path, th, deck=None):
                 break
         else:
             slug = re.sub(r"[^\w-]+", "-", slides[0]["head"].lower()).strip("-") or "talk"
-            out = path or ask("Файл", slug + ".deck")
-            while out is not BACK and os.path.exists(out):
+            out = path or ask("Файл", tilde(os.path.join(base, slug + ".deck")))
+            while out is not BACK and os.path.exists(os.path.expanduser(out)):
                 v = ask(f"{out} уже есть, перезаписать? (y/n)", "n")
                 if v == "y":
                     break
                 out = BACK if v is BACK else ask("Тогда другой файл", "<")
             if out is not BACK:
                 break
-    head = "\n".join(f"{k}: {v}" for k, v in meta.items() if v)
+    out = os.path.expanduser(out)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        f.write("\n\n---\n".join(([head] if head else []) + [slide_text(s) for s in slides]) + "\n")
-    print(tint(th.accent, f"\n  записано: {out}") + tint(th.muted, f"  ·  показ: omadeck {out}"))
+        f.write(compose())
+    print(tint(th.accent, f"\n  записано: {tilde(out)}") + tint(th.muted, f"  ·  показ: omadeck {tilde(out)}"))
     return out if ask("Показать сейчас? (y/n)", "y") == "y" else None
+
+
+def find_decks():
+    """Презентации в текущей папке и в ~/Presentations, свежие сверху."""
+    found = {}
+    for d in (os.getcwd(), DECK_DIR):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            p = os.path.join(d, name)
+            if name.endswith(".deck") and os.path.isfile(p):
+                found.setdefault(os.path.realpath(p), p)
+    return sorted(found.values(), key=os.path.getmtime, reverse=True)[:30]
+
+
+def launcher(th):
+    """Стартовое меню: omadeck без аргументов и пункт в меню Omarchy."""
+    tint = lambda c, s: "\x1b[38;2;%d;%d;%dm%s\x1b[0m" % (*c, s)
+    key = lambda s: tint(th.accent, s)
+    note = ""
+    while True:
+        decks = find_decks()
+        print("\x1b[2J\x1b[H")
+        for row in banner("omadeck", "small"):
+            print("  " + tint(th.accent, row))
+        print(tint(th.muted, "  презентации в терминале\n"))
+        for n, p in enumerate(decks, 1):
+            print(f"  {key(f'{n:>2}')}  {os.path.basename(p)[:-5]}  {tint(th.faint, tilde(os.path.dirname(p)))}")
+        if not decks:
+            print(tint(th.muted, f"  презентаций пока нет — создайте первую или посмотрите демо\n"
+                                 f"  (ищу *.deck здесь и в {tilde(DECK_DIR)})"))
+        print(f"\n  {key('N')} показать  {key('eN')} править  {key('+')} новая  "
+              f"{key('d')} демо  {key('i')} иконки  {key('q')} выход")
+        if note:
+            print(tint(th.hot, "  " + note))
+        note = ""
+        try:
+            cmd = input(tint(th.accent, "▪ ") + "Что открыть: ").strip().lower().replace(" ", "")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        m = re.fullmatch(r"([eе]?)(\d+)", cmd)
+        try:
+            if cmd in ("q", "й"):
+                return
+            if m and 1 <= int(m.group(2)) <= len(decks):
+                path = decks[int(m.group(2)) - 1]
+                if m.group(1):
+                    path = wizard(path, th, load_deck(path))
+                if path:
+                    Player(load_deck(path), th).run()
+            elif cmd in ("+", "n", "т"):
+                path = wizard(None, th, base=DECK_DIR)
+                if path:
+                    Player(load_deck(path), th).run()
+            elif cmd in ("d", "в"):
+                Player(parse_deck(DEMO), th).run()
+            elif cmd in ("i", "ш"):
+                Player(icons_deck(), th).run()
+            elif cmd:
+                note = "не понял: номер из списка или одна из команд ниже"
+        except DeckError as e:
+            note = str(e)
+        except (KeyboardInterrupt, EOFError):
+            note = "отменено"
+
+
+def icons_deck():
+    return parse_deck("title: Иконки omadeck\n\n---\n" + "\n---\n".join(
+        f"@icons group={g}\n# {title}" for g, (title, _) in ICON_GROUPS.items()))
 
 
 # ---------------------------------------------------------------- запуск
@@ -2452,7 +3214,10 @@ def main():
 
     try:
         if not args.cmd:
-            ap.print_help()
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                launcher(Theme())
+            else:
+                ap.print_help()
             return 0
         if args.cmd == "effects":
             print("\n".join(EFFECTS))
@@ -2469,12 +3234,13 @@ def main():
             print(f"записано: {file}")
             return 0
         if args.cmd in ("new", "edit"):
-            file = wizard(file, th, load_deck(file) if args.cmd == "edit" else None)
+            old = args.cmd == "edit" and os.path.exists(file)    # нет файла — значит, новая
+            file = wizard(file, th, load_deck(file) if old else None)
             if not file:
                 return 0
             deck = load_deck(file)
         elif args.cmd == "icons":
-            deck = parse_deck("@icons\n# Иконки\n")
+            deck = icons_deck()
         elif args.cmd == "demo" or (args.cmd == "dump" and not file):
             deck = parse_deck(DEMO)
         else:

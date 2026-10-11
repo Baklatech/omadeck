@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=omadeck
+GenericName=Terminal presentations
+GenericName[ru]=Презентации в терминале
+Comment=Make and show presentations right in the terminal, in the Omarchy style
+Comment[ru]=Презентации прямо в терминале, в духе Omarchy
+Exec=omadeck
+Terminal=true
+Icon=omadeck
+Categories=Office;Presentation;ConsoleOnly;
+Keywords=slides;presentation;deck;tui;
